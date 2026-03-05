@@ -1,0 +1,5 @@
+# Replace <WORKFLOW_NAME> and paste workflowJson in place.
+curl -sS -X POST "https://n8n.ermine-zebra.ts.net/webhook/admin/workflows/upsert" \
+  -H "Content-Type: application/json" \
+  -H "X-Mobile-Secret: <YOUR_SECRET>" \
+  -d @deploy-payload.json

@@ -1,0 +1,282 @@
+{
+    "name": "AI_PDF_Document_Intelligent_Processing",
+    "active": false,
+    "settings": {
+        "executionOrder": "v1"
+    },
+    "versionId": "1",
+    "nodes": [
+        {
+            "parameters": {},
+            "id": "1",
+            "name": "Start",
+            "type": "n8n-nodes-base.manualTrigger",
+            "typeVersion": 1,
+            "position": [
+                200,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "filePath": "/data/input.pdf",
+                "options": {}
+            },
+            "id": "2",
+            "name": "Read Input PDF",
+            "type": "n8n-nodes-base.readBinaryFile",
+            "typeVersion": 1,
+            "position": [
+                400,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const pdfBinary = $input.item.binary.data;\n\n// Simulated AI OCR processing\n// In production, replace with HTTP Request to AI OCR service\n\nconst extractedText = \"{{FULL_TEXT_FROM_AI_OCR_NODE}}\";\n\nreturn [{\n  json: {\n    ocr_text: extractedText\n  },\n  binary: {\n    data: pdfBinary\n  }\n}];"
+            },
+            "id": "3",
+            "name": "AI OCR Node",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 2,
+            "position": [
+                600,
+                300
+            ]
+        },
+        {
+            "parameters": {
+                "functionCode": "const text = $json.ocr_text;\n\n// Simulated AI Document Analyzer\n// Replace with LLM API call for structural boundary detection\n\nlet resultFlag = \"Single Document\";\n\nif (text.includes(\"===NEW_DOCUMENT===\") || text.split(\"Page\").length > 5) {\n  resultFlag = \"Multi-Document\";\n}\n\nreturn [{\n  json: {\n    ocr_text: text,\n    document_type: resultFlag\n  },\n  binary: $binary\n}];"
+            },
+            "id": "4",
+            "name": "AI Document Analyzer Node",
+            "type": "n8n-nodes-base.function",
+            "typeVersion": 2,
+            "position": [
+                800,
+                300
+            ]
+        },
+    {
+        "parameters": {
+            "conditions": {
+                "string": [
+                    {
+                        "value1": "={{$json[\"document_type\"]}}",
+                        "operation": "equal",
+                        "value2": "Single Document"
+                    },
+                    {
+                        "value1": "={{$json[\"document_type\"]}}",
+                        "operation": "equal",
+                        "value2": "Multi-Document"
+                    }
+                ]
+            }
+        },
+        "id": "5",
+        "name": "Switch Document Type",
+        "type": "n8n-nodes-base.switch",
+        "typeVersion": 2,
+        "position": [
+            1000,
+            300
+        ]
+    },
+    {
+        "parameters": {
+            "functionCode": "console.log(\"Single document detected. No splitting required.\");\nreturn items;"
+        },
+        "id": "6",
+        "name": "Log Success - Single Document",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 2,
+        "position": [
+            1200,
+            200
+        ]
+    },
+    {
+        "parameters": {
+            "fileName": "=/data/copy_{{$now}}.pdf",
+            "dataPropertyName": "data"
+        },
+        "id": "7",
+        "name": "Create PDF Copy",
+        "type": "n8n-nodes-base.writeBinaryFile",
+        "typeVersion": 1,
+        "position": [
+            1200,
+            400
+        ]
+    },
+    {
+        "parameters": {
+            "functionCode": "// Simulated AI Document Splitter\n// Replace with real AI service that detects page boundaries\n\nconst segments = [\n  { start_page: 1, end_page: 5, doc_name: \"Document_A\" },\n  { start_page: 6, end_page: 10, doc_name: \"Document_B\" }\n];\n\nreturn segments.map(segment => ({\n  json: segment,\n  binary: $binary\n}));"
+        },
+        "id": "8",
+        "name": "AI Document Splitter Node",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 2,
+        "position": [
+            1400,
+            400
+        ]
+    },
+    {
+        "parameters": {
+            "batchSize": 1
+        },
+        "id": "9",
+        "name": "Split Segment Loop",
+        "type": "n8n-nodes-base.splitInBatches",
+        "typeVersion": 1,
+        "position": [
+            1600,
+            400
+        ]
+    },
+    {
+        "parameters": {
+            "functionCode": "// Placeholder page extraction logic\n// Replace with PDF manipulation library or API call\n\nconst { start_page, end_page, doc_name } = $json;\n\n// Simulated extraction result\n\nreturn [{\n  json: {\n    fileName: doc_name + \".pdf\"\n  },\n  binary: {\n    data: $binary.data\n  }\n}];"
+        },
+        "id": "10",
+        "name": "Extract Page Range",
+        "type": "n8n-nodes-base.function",
+        "typeVersion": 2,
+        "position": [
+            1800,
+            400
+        ]
+    },
+    {
+        "parameters": {
+            "fileName": "=/data/{{$json[\"fileName\"]}}",
+            "dataPropertyName": "data"
+        },
+        "id": "11",
+        "name": "Save Split PDF",
+        "type": "n8n-nodes-base.writeBinaryFile",
+        "typeVersion": 1,
+        "position": [
+            2000,
+            400
+        ]
+    }
+],
+"connections": {
+    "Start": {
+        "main": [
+            [
+                {
+                    "node": "Read Input PDF",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "Read Input PDF": {
+        "main": [
+            [
+                {
+                    "node": "AI OCR Node",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "AI OCR Node": {
+        "main": [
+            [
+                {
+                    "node": "AI Document Analyzer Node",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "AI Document Analyzer Node": {
+        "main": [
+            [
+                {
+                    "node": "Switch Document Type",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "Switch Document Type": {
+        "main": [
+            [
+                {
+                    "node": "Log Success - Single Document",
+                    "type": "main",
+                    "index": 0
+                }
+            ],
+            [
+                {
+                    "node": "Create PDF Copy",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "Create PDF Copy": {
+        "main": [
+            [
+                {
+                    "node": "AI Document Splitter Node",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "AI Document Splitter Node": {
+        "main": [
+            [
+                {
+                    "node": "Split Segment Loop",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "Split Segment Loop": {
+        "main": [
+            [
+                {
+                    "node": "Extract Page Range",
+                    "type": "main",
+                    "index": 0
+                }
+            ],
+            [
+                {
+                    "node": "Split Segment Loop",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    },
+    "Extract Page Range": {
+        "main": [
+            [
+                {
+                    "node": "Save Split PDF",
+                    "type": "main",
+                    "index": 0
+                }
+            ]
+        ]
+    }
+}
+}

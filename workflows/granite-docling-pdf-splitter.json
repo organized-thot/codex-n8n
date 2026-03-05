@@ -1,0 +1,111 @@
+{
+  "name": "Granite DocLing PDF Separator (Fixed)",
+  "nodes": [
+    {
+      "parameters": {},
+      "id": "Manual Trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const fs = require('fs');\nconst path = 'D:/EPSCAN/';\n\nconst files = fs.readdirSync(path)\n  .filter(file => file.toLowerCase().endsWith('.pdf'))\n  .map(file => ({ filePath: path + file }));\n\nreturn files.map(f => ({ json: f }));"
+      },
+      "id": "List PDFs",
+      "name": "List PDFs",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [400, 300]
+    },
+    {
+      "parameters": {
+        "filePath": "={{$json.filePath}}"
+      },
+      "id": "Read PDF",
+      "name": "Read PDF",
+      "type": "n8n-nodes-base.readBinaryFile",
+      "typeVersion": 1,
+      "position": [600, 300]
+    },
+    {
+      "parameters": {
+        "functionCode": "const { PDFDocument } = require('pdf-lib');\n\nconst buffer = Buffer.from(items[0].binary.data.data);\nconst pdfDoc = await PDFDocument.load(buffer);\n\nreturn [{\n  json: {\n    filePath: $json.filePath,\n    pageCount: pdfDoc.getPageCount()\n  },\n  binary: items[0].binary\n}];"
+      },
+      "id": "Get Page Count",
+      "name": "Get Page Count",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [800, 300]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "number": [
+            {
+              "value1": "={{$json.pageCount}}",
+              "operation": "greaterThan",
+              "value2": 1
+            }
+          ]
+        }
+      },
+      "id": "If Multi Page",
+      "name": "If Multi Page",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 1,
+      "position": [1000, 300]
+    },
+    {
+      "parameters": {
+        "method": "POST",
+        "url": "http://localhost:11434/api/generate",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"model\": \"ibm/granite-docling\",\n  \"prompt\": \"Perform layout-aware document boundary detection across pages. Identify boundary starts based on: page number reset to 1/01/I, new recipient address block, new addressee, date change, branding shift. Return JSON array of boundary page indexes.\",\n  \"stream\": false\n}"
+      },
+      "id": "Granite Analysis",
+      "name": "Granite Analysis",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [1200, 200]
+    },
+    {
+      "parameters": {
+        "functionCode": "const { PDFDocument } = require('pdf-lib');\nconst fs = require('fs');\nconst path = require('path');\n\nconst buffer = Buffer.from(items[0].binary.data.data);\nconst pdfDoc = await PDFDocument.load(buffer);\nconst pageCount = pdfDoc.getPageCount();\n\nlet boundaries = [];\ntry {\n  const parsed = JSON.parse($json.response);\n  boundaries = parsed;\n} catch {\n  return items;\n}\n\nif (!Array.isArray(boundaries) || boundaries.length === 0) return items;\n\nboundaries.sort((a,b)=>a-b);\nboundaries.push(pageCount);\n\nlet start = 0;\nlet part = 1;\n\nconst outputDir = 'D:/EPSCAN/Processed';\nif (!fs.existsSync(outputDir)) fs.mkdirSync(outputDir);\n\nfor (const boundary of boundaries) {\n  const newDoc = await PDFDocument.create();\n  const pages = await newDoc.copyPages(pdfDoc, Array.from({length: boundary-start}, (_,i)=>i+start));\n  pages.forEach(p=>newDoc.addPage(p));\n\n  const bytes = await newDoc.save();\n  const base = path.basename($json.filePath, '.pdf');\n  fs.writeFileSync(`${outputDir}/${base}_part${part}.pdf`, bytes);\n\n  start = boundary;\n  part++;\n}\n\nreturn items;"
+      },
+      "id": "Split PDF",
+      "name": "Split PDF",
+      "type": "n8n-nodes-base.function",
+      "typeVersion": 1,
+      "position": [1400, 200]
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "List PDFs", "type": "main", "index": 0 }]]
+    },
+    "List PDFs": {
+      "main": [[{ "node": "Read PDF", "type": "main", "index": 0 }]]
+    },
+    "Read PDF": {
+      "main": [[{ "node": "Get Page Count", "type": "main", "index": 0 }]]
+    },
+    "Get Page Count": {
+      "main": [[{ "node": "If Multi Page", "type": "main", "index": 0 }]]
+    },
+    "If Multi Page": {
+      "main": [
+        [{ "node": "Granite Analysis", "type": "main", "index": 0 }],
+        []
+      ]
+    },
+    "Granite Analysis": {
+      "main": [[{ "node": "Split PDF", "type": "main", "index": 0 }]]
+    }
+  },
+  "active": false,
+  "settings": {},
+  "versionId": "2"
+}

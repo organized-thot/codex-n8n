@@ -1,0 +1,88 @@
+{
+  "name": "Local PDF Document Splitter - PaddleOCR + Llama3",
+  "nodes": [
+    {
+      "id": "trigger",
+      "name": "Manual Trigger",
+      "type": "n8n-nodes-base.manualTrigger",
+      "typeVersion": 1,
+      "position": [200, 300],
+      "parameters": {}
+    },
+    {
+      "id": "listFiles",
+      "name": "List PDFs",
+      "type": "n8n-nodes-base.readBinaryFiles",
+      "typeVersion": 1,
+      "position": [400, 300],
+      "parameters": {
+        "fileSelector": "/home/node/.n8n-files/ScannedDocs/*.pdf"
+      }
+    },
+    {
+      "id": "ocrRequest",
+      "name": "PaddleOCR",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [600, 300],
+      "parameters": {
+        "url": "http://paddleocr:8000/ocr",
+        "method": "POST",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data"
+      }
+    },
+    {
+      "id": "detectBoundaries",
+      "name": "Boundary Detection",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [800, 300],
+      "parameters": {
+        "language": "JavaScript",
+        "code": "const pages = $json.pages;\nlet boundaries = [1];\n\nfor (let i = 1; i < pages.length; i++) {\n  const prev = pages[i-1].text;\n  const current = pages[i].text;\n\n  const pageReset = /\\bpage\\s*1\\b/i.test(current);\n  const dateShift = /\\b\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}\\b/.test(current) && !prev.includes(current.match(/\\b\\d{1,2}\\/\\d{1,2}\\/\\d{2,4}\\b/));\n\n  if (pageReset || dateShift) {\n    boundaries.push(i+1);\n  }\n}\n\nreturn [{ boundaries, pages }];"
+      }
+    },
+    {
+      "id": "llama",
+      "name": "Llama3 Boundary Refinement",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 2,
+      "position": [1000, 300],
+      "parameters": {
+        "url": "http://ollama:11434/api/generate",
+        "method": "POST",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\"model\":\"llama3:8b-instruct\",\"stream\":false,\"prompt\":\"Analyze these OCR pages and return strict JSON: { \\\"documents\\\": [{\\\"start_page\\\":1,\\\"end_page\\\":3}] }. Pages: \" + JSON.stringify($json.pages)}"
+      }
+    },
+    {
+      "id": "splitPdf",
+      "name": "Split PDF",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [1200, 300],
+      "parameters": {
+        "language": "JavaScript",
+        "code": "const { PDFDocument } = require('pdf-lib');\nconst fs = require('fs');\n\nconst response = JSON.parse($json.response);\nconst docs = response.documents;\n\nconst originalPath = $binary.data.filePath;\nconst originalBytes = fs.readFileSync(originalPath);\nconst originalPdf = await PDFDocument.load(originalBytes);\n\nfor (let i = 0; i < docs.length; i++) {\n  const { start_page, end_page } = docs[i];\n  const newPdf = await PDFDocument.create();\n  const pages = await newPdf.copyPages(originalPdf,\n    Array.from({ length: end_page - start_page + 1 }, (_, k) => k + start_page - 1)\n  );\n  pages.forEach(p => newPdf.addPage(p));\n  const pdfBytes = await newPdf.save();\n\n  const outputPath = `/home/node/.n8n-files/ScannedDocs/Processed/part_${i+1}.pdf`;\n  fs.writeFileSync(outputPath, pdfBytes);\n}\n\nreturn items;"
+      }
+    }
+  ],
+  "connections": {
+    "Manual Trigger": {
+      "main": [[{ "node": "List PDFs", "type": "main", "index": 0 }]]
+    },
+    "List PDFs": {
+      "main": [[{ "node": "PaddleOCR", "type": "main", "index": 0 }]]
+    },
+    "PaddleOCR": {
+      "main": [[{ "node": "Boundary Detection", "type": "main", "index": 0 }]]
+    },
+    "Boundary Detection": {
+      "main": [[{ "node": "Llama3 Boundary Refinement", "type": "main", "index": 0 }]]
+    },
+    "Llama3 Boundary Refinement": {
+      "main": [[{ "node": "Split PDF", "type": "main", "index": 0 }]]
+    }
+  }
+}

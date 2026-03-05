@@ -1,0 +1,190 @@
+{
+  "name": "Chat → Build Workflow JSON → Create via n8n API (Gemini 2.5 Flash-Lite)",
+  "nodes": [
+    {
+      "parameters": {
+        "public": false,
+        "options": {
+          "responseMode": "responseNode",
+          "title": "Workflow Builder Chat",
+          "inputPlaceholder": "Describe the workflow you want (trigger, apps, steps, constraints)…"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "typeVersion": 1.4,
+      "position": [
+        -700,
+        0
+      ],
+      "id": "0f6f6b85-0f73-4b8a-8c76-6c8c7b3b2e1a",
+      "name": "When chat message received",
+      "webhookId": "9d3f3cc3-7a92-4f5c-9c1e-1d2a0d2d8c11"
+    },
+    {
+      "parameters": {
+        "promptType": "define",
+        "text": "={{ $json.chatInput }}",
+        "options": {
+          "systemMessage": "You are an n8n workflow architect.\n\nGoal:\n- Have a short conversation in chat to clarify requirements.\n- Then output ONLY valid JSON (no markdown) containing a single object: {\"workflow\": { ... }}.\n- The workflow you generate MUST be a valid n8n workflow export object with at least: name, nodes, connections, settings.\n- Include both built-in nodes and (if the user confirms they have any installed) community nodes.\n\nConversation rules:\n1) If requirements are missing, ask concise follow-up questions ONE AT A TIME.\n2) You may ask about:\n   - trigger type (Webhook, Schedule, Chat Trigger, IMAP, etc.)\n   - inputs & expected outputs\n   - services involved\n   - credentials available (or placeholders)\n   - whether any community nodes are installed (package names or node type IDs)\n3) When you have enough info, generate the workflow.\n\nOutput rules:\n- When ready, return ONLY JSON.\n- Top-level format must be:\n  {\n    \"workflow\": {\n      \"name\": \"...\",\n      \"nodes\": [...],\n      \"connections\": {...},\n      \"settings\": {...}\n    },\n    \"notes\": {\n      \"howToUse\": \"short instructions\",\n      \"assumptions\": [ ... ]\n    }\n  }\n\nQuality rules for generated workflows:\n- Use clear node names.\n- Put placeholder credentials rather than real secrets.\n- Prefer robust patterns (error handling, idempotency when appropriate).\n- If the user asks for a community node but doesn't provide a type ID, ask for it (or ask what package they installed).\n"
+        }
+      },
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "typeVersion": 2.2,
+      "position": [
+        -260,
+        0
+      ],
+      "id": "4c4a9c01-7a10-4a31-9e65-7a1d7fb2b49f",
+      "name": "AI Agent"
+    },
+    {
+      "parameters": {
+        "modelName": "models/gemini-2.5-flash-lite",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "typeVersion": 1,
+      "position": [
+        -260,
+        -220
+      ],
+      "id": "b9e22b1c-4b8a-4f9c-bb37-3e9ee58a5c6b",
+      "name": "Google Gemini Chat Model",
+      "credentials": {
+        "googlePalmApi": {
+          "id": "AIzaSyADTv63CCqO8EBdD_KiFiiWGBt5uA-11TA",
+          "name": "Google Gemini(PaLM) Api account"
+        }
+      }
+    },
+    {
+      "parameters": {
+        "jsCode": "/* The AI Agent returns a string in $json.output.\n   Parse it and keep only the workflow object for the API call. */\n\nfunction safeJsonParse(str) {\n  try {\n    return JSON.parse(str);\n  } catch (e) {\n    return null;\n  }\n}\n\nconst parsed = safeJsonParse($json.output);\n\nif (!parsed || !parsed.workflow) {\n  // If the agent is still asking questions, it may not have returned JSON.\n  // Pass through a marker so we can respond gracefully.\n  return [{ json: { isReady: false, raw: $json.output } }];\n}\n\nreturn [{ json: { isReady: true, workflow: parsed.workflow, notes: parsed.notes ?? {} } }];"
+      },
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        40,
+        0
+      ],
+      "id": "b0b1b2b3-b4b5-4b6b-8b7b-8b9b0b1b2b3c",
+      "name": "Parse Agent Output"
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.N8N_PUBLIC_API_BASE + '/workflows' }}",
+        "method": "POST",
+        "authentication": "none",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ $json.workflow }}",
+        "options": {
+          "response": {
+            "responseFormat": "json"
+          }
+        }
+      },
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.3,
+      "position": [
+        340,
+        0
+      ],
+      "id": "c1c2c3c4-c5c6-4c7c-8c9c-0c1c2c3c4c5d",
+      "name": "Create Workflow via n8n API"
+    },
+    {
+      "parameters": {
+        "message": "={{ $json.isReady ? `✅ Created workflow: ${$node[\"Create Workflow via n8n API\"].json.name ?? \"(name unknown)\"}\\nID: ${$node[\"Create Workflow via n8n API\"].json.id ?? \"(id unknown)\"}\\nActive: ${$node[\"Create Workflow via n8n API\"].json.active ?? false}\\n\\nNotes: ${JSON.stringify($node[\"Parse Agent Output\"].json.notes ?? {}, null, 2)}` : `I need a bit more info first:\\n\\n${$json.raw}` }}",
+        "options": {}
+      },
+      "type": "@n8n/n8n-nodes-langchain.chat",
+      "typeVersion": 1,
+      "position": [
+        660,
+        0
+      ],
+      "id": "d1d2d3d4-d5d6-4d7d-8d9d-0d1d2d3d4d5e",
+      "name": "Respond to Chat"
+    }
+  ],
+  "connections": {
+    "When chat message received": {
+      "main": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [
+        [
+          {
+            "node": "AI Agent",
+            "type": "ai_languageModel",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Agent": {
+      "main": [
+        [
+          {
+            "node": "Parse Agent Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Parse Agent Output": {
+      "main": [
+        [
+          {
+            "node": "Create Workflow via n8n API",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Workflow via n8n API": {
+      "main": [
+        [
+          {
+            "node": "Respond to Chat",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionTimeout": 300,
+    "saveExecutionProgress": true,
+    "saveManualExecutions": true
+  },
+  "pinData": {},
+  "meta": {
+    "templateCredsSetupCompleted": false
+  }
+}

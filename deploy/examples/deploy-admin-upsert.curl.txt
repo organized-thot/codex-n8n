@@ -1,0 +1,8 @@
+curl -sS -X POST "https://n8n.ermine-zebra.ts.net/webhook/admin/workflows/upsert" \
+  -H "Content-Type: application/json" \
+  -H "X-Mobile-Secret: <YOUR_SECRET>" \
+  -d '{
+    "name": "Example Workflow",
+    "workflowJson": { "name": "Example Workflow", "nodes": [], "connections": {}, "settings": {} },
+    "active": false
+  }'

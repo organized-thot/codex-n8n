@@ -1,0 +1,4 @@
+curl -sS -X POST "https://n8n.ermine-zebra.ts.net/webhook/mobile/inbox" \
+  -H "Content-Type: application/json" \
+  -H "X-Mobile-Secret: <YOUR_SECRET>" \
+  -d '{"text":"hello","source":"curl-test"}'

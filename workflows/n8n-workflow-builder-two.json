@@ -1,0 +1,363 @@
+{
+  "meta": {
+    "instanceId": "REPLACE_ME",
+    "templateCredsSetupCompleted": false
+  },
+  "name": "AI Workflow Generator (Gemini/OpenRouter/Ollama, no n8nbuilder)",
+  "nodes": [
+    {
+      "id": "2b5c7e5e-5a0f-4f86-b0a2-5a3e7aa5a0f1",
+      "name": "When chat message received",
+      "type": "@n8n/n8n-nodes-langchain.chatTrigger",
+      "position": [680, -380],
+      "parameters": { "options": {} },
+      "typeVersion": 1.4,
+      "webhookId": "chat-webhook-ai-workflow-generator"
+    },
+    {
+      "id": "a7a8cbb4-0abf-4c3d-9c6f-0e0f9388f7d3",
+      "name": "AI Agent (asks follow-ups + outputs workflow JSON)",
+      "type": "@n8n/n8n-nodes-langchain.agent",
+      "position": [920, -380],
+      "parameters": {
+        "options": {
+          "systemMessage": "You are an n8n workflow generator.\n\nYour job:\n1) Ask concise follow-up questions ONLY if required to remove ambiguity (credentials, schedule, triggers, destinations, IDs, etc).\n2) When you have enough information, output a SINGLE valid n8n workflow JSON object.\n\nRules:\n- Output ONLY JSON (no markdown fences, no commentary).\n- Use only built-in n8n nodes when possible.\n- Prefer Webhook, Schedule Trigger, HTTP Request, Set, IF, Code, Merge, and common app nodes.\n- Put placeholder credential names/ids where needed.\n- Ensure the JSON has at minimum: name, nodes[], connections{}.\n\nIf user asks for a provider, support: gemini, openrouter, ollama.\n"
+        }
+      },
+      "typeVersion": 3.1
+    },
+
+    {
+      "id": "9fdf0b0a-4c0e-4c78-9a0c-8d0c6b2f1f6a",
+      "name": "Workflow Generator Form",
+      "type": "n8n-nodes-base.formTrigger",
+      "position": [680, -120],
+      "parameters": {
+        "options": { "buttonLabel": "Generate Workflow", "appendAttribution": false },
+        "formTitle": "AI n8n Workflow Generator (No n8nBuilder)",
+        "formDescription": "Generate complete n8n workflow JSON from a natural language description using Gemini/OpenRouter/Ollama.",
+        "formFields": {
+          "values": [
+            {
+              "fieldName": "provider",
+              "fieldLabel": "Provider (gemini/openrouter/ollama)",
+              "placeholder": "openrouter",
+              "requiredField": true
+            },
+            {
+              "fieldName": "model",
+              "fieldLabel": "Model (provider-specific)",
+              "placeholder": "OpenRouter: openai/gpt-4o-mini | Gemini: (select in node) | Ollama: llama3.1",
+              "requiredField": false
+            },
+            {
+              "fieldName": "query",
+              "fieldType": "textarea",
+              "fieldLabel": "Workflow Description",
+              "placeholder": "Example: Read RSS every hour and send Slack message if a new post arrives",
+              "requiredField": true
+            }
+          ]
+        }
+      },
+      "typeVersion": 2.4,
+      "webhookId": "form-webhook-ai-workflow-generator"
+    },
+
+    {
+      "id": "e2dc1e8e-2bf8-4c2b-8a9d-0a9b9c7f1b25",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "position": [680, 160],
+      "parameters": {
+        "path": "generate-workflow-free",
+        "httpMethod": "POST",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "typeVersion": 2,
+      "webhookId": "webhook-ai-workflow-generator"
+    },
+
+    {
+      "id": "4e9e0c9a-70b8-4e20-9d6b-4c3d9d2b08e8",
+      "name": "Normalize Input (Form/Webhook)",
+      "type": "n8n-nodes-base.set",
+      "position": [940, 20],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            { "id": "a1", "name": "provider", "type": "string", "value": "={{ $json.provider || $json.body?.provider || 'openrouter' }}" },
+            { "id": "a2", "name": "model", "type": "string", "value": "={{ $json.model || $json.body?.model || '' }}" },
+            { "id": "a3", "name": "query", "type": "string", "value": "={{ $json.query || $json.body?.query || '' }}" }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+
+    {
+      "id": "7c0f0ce1-6f3c-4f64-b4b2-76a9ad9d6db5",
+      "name": "Switch Provider",
+      "type": "n8n-nodes-base.switch",
+      "position": [1200, 20],
+      "parameters": {
+        "propertyName": "provider",
+        "rules": {
+          "values": [
+            { "operation": "equal", "value1": "gemini" },
+            { "operation": "equal", "value1": "ollama" },
+            { "operation": "equal", "value1": "openrouter" }
+          ]
+        }
+      },
+      "typeVersion": 2
+    },
+
+    {
+      "id": "a3d1a0f2-8d61-4d24-9dbe-3d5f63a2a4c9",
+      "name": "Prompt (LLM)",
+      "type": "n8n-nodes-base.set",
+      "position": [1440, 20],
+      "parameters": {
+        "options": {},
+        "assignments": {
+          "assignments": [
+            {
+              "id": "p1",
+              "name": "prompt",
+              "type": "string",
+              "value": "={{ `You are an n8n workflow generator. Output ONLY a valid n8n workflow JSON object (no markdown).\\n\\nUser request:\\n${$json.query}\\n\\nConstraints:\\n- Must be valid JSON.\\n- Include name, nodes, connections.\\n- Use built-in nodes where possible.\\n- Put placeholders for credentials.\\n` }}"
+            }
+          ]
+        }
+      },
+      "typeVersion": 3.4
+    },
+
+    {
+      "id": "c6f3b1df-5b5d-4e7b-9b2d-7d97d2d3f3d1",
+      "name": "LLM Chain (OpenRouter)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [1700, -80],
+      "parameters": {
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "typeVersion": 1.6
+    },
+    {
+      "id": "2c5b8c51-b2c2-4b1f-9d5d-7d0e2d3c1b8f",
+      "name": "OpenRouter Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOpenRouter",
+      "position": [1700, -220],
+      "parameters": {
+        "model": "={{ $json.model && $json.model.length ? $json.model : 'openai/gpt-4o-mini' }}",
+        "options": { "temperature": 0.1 }
+      },
+      "typeVersion": 1
+    },
+
+    {
+      "id": "5d9e2f7a-3c8e-4c37-b3f9-3f1b6f9d2e1c",
+      "name": "LLM Chain (Gemini)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [1700, 40],
+      "parameters": {
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "typeVersion": 1.6
+    },
+    {
+      "id": "0f3a3d9c-1c3e-4b6f-9d2e-7c1b2d3e4f5a",
+      "name": "Google Gemini Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatGoogleGemini",
+      "position": [1700, -60],
+      "parameters": {
+        "options": { "temperature": 0.1 }
+      },
+      "typeVersion": 1
+    },
+
+    {
+      "id": "0a2b3c4d-5e6f-7a8b-9c0d-1e2f3a4b5c6d",
+      "name": "LLM Chain (Ollama)",
+      "type": "@n8n/n8n-nodes-langchain.chainLlm",
+      "position": [1700, 160],
+      "parameters": {
+        "prompt": "={{ $json.prompt }}",
+        "options": {}
+      },
+      "typeVersion": 1.6
+    },
+    {
+      "id": "1b2c3d4e-5f6a-7b8c-9d0e-1f2a3b4c5d6e",
+      "name": "Ollama Chat Model",
+      "type": "@n8n/n8n-nodes-langchain.lmChatOllama",
+      "position": [1700, 300],
+      "parameters": {
+        "model": "={{ $json.model && $json.model.length ? $json.model : 'llama3.1' }}",
+        "options": { "temperature": 0.1 }
+      },
+      "typeVersion": 1
+    },
+
+    {
+      "id": "9a7f6c5b-4d3e-2f1a-0b9c-8d7e6f5a4b3c",
+      "name": "Extract LLM Text",
+      "type": "n8n-nodes-base.code",
+      "position": [1960, 20],
+      "parameters": {
+        "jsCode": "const item = $input.first();\n// chainLlm typically returns a 'text' field (but varies by version).\n// Try common shapes:\nconst text = item.json.text ?? item.json.output ?? item.json.data?.text ?? item.json.result ?? '';\nreturn [{ json: { raw: text } }];"
+      },
+      "typeVersion": 1
+    },
+
+    {
+      "id": "c2a1b0d9-8e7f-6a5b-4c3d-2e1f0a9b8c7d",
+      "name": "Validate / Coerce JSON",
+      "type": "n8n-nodes-base.code",
+      "position": [2200, 20],
+      "parameters": {
+        "jsCode": "function tryParse(s) {\n  if (!s) return null;\n  // Remove ```json fences if the model ignored instructions\n  const cleaned = s.replace(/^```json\\s*/i, '').replace(/^```\\s*/i, '').replace(/```\\s*$/i, '').trim();\n  try { return JSON.parse(cleaned); } catch { return null; }\n}\n\nconst raw = $json.raw ?? '';\nconst parsed = tryParse(raw);\n\nif (!parsed || typeof parsed !== 'object' || !parsed.nodes || !parsed.connections) {\n  return [{ json: {\n    success: false,\n    error: 'Model output was not a valid n8n workflow JSON (expected an object with nodes[] and connections{}).',\n    raw\n  }}];\n}\n\nreturn [{ json: {\n  success: true,\n  workflow: parsed,\n  workflow_json: JSON.stringify(parsed, null, 2),\n  timestamp: new Date().toISOString()\n}}];"
+      },
+      "typeVersion": 1
+    },
+
+    {
+      "id": "5b4a3c2d-1e0f-9d8c-7b6a-5f4e3d2c1b0a",
+      "name": "IF Valid",
+      "type": "n8n-nodes-base.if",
+      "position": [2440, 20],
+      "parameters": {
+        "conditions": {
+          "boolean": [{ "value1": "={{ $json.success }}", "value2": true }]
+        }
+      },
+      "typeVersion": 2
+    },
+
+    {
+      "id": "f4e3d2c1-b0a9-8d7c-6b5a-4e3d2c1b0a9f",
+      "name": "Show Results (Form)",
+      "type": "n8n-nodes-base.form",
+      "position": [2700, -60],
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Workflow Generated!",
+        "completionMessage": "=**Generated at:** {{ $json.timestamp }}\n\n**Provider:** {{ $json.provider || 'selected by branch' }}\n\n**Workflow JSON:**\n```json\n{{ $json.workflow_json }}\n```",
+        "options": {}
+      },
+      "typeVersion": 2.4,
+      "webhookId": "form-result-ai-workflow-generator"
+    },
+
+    {
+      "id": "e0d9c8b7-a6f5-4e3d-2c1b-0a9f8e7d6c5b",
+      "name": "Show Error (Form)",
+      "type": "n8n-nodes-base.form",
+      "position": [2700, 120],
+      "parameters": {
+        "operation": "completion",
+        "completionTitle": "Generation Failed",
+        "completionMessage": "=**Error:** {{ $json.error }}\n\n**Raw model output:**\n```\n{{ $json.raw }}\n```",
+        "options": {}
+      },
+      "typeVersion": 2.4,
+      "webhookId": "form-error-ai-workflow-generator"
+    },
+
+    {
+      "id": "b9c8d7e6-f5a4-3b2c-1d0e-9f8a7b6c5d4e",
+      "name": "Return Success (Webhook)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2700, 220],
+      "parameters": {
+        "respondWith": "json",
+        "options": { "responseCode": 200 },
+        "responseBody": "={\n  \"success\": true,\n  \"timestamp\": \"{{ $json.timestamp }}\",\n  \"workflow\": {{ $json.workflow_json }}\n}"
+      },
+      "typeVersion": 1.1
+    },
+    {
+      "id": "a8b7c6d5-e4f3-2a1b-0c9d-8e7f6a5b4c3d",
+      "name": "Return Error (Webhook)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "position": [2700, 360],
+      "parameters": {
+        "respondWith": "json",
+        "options": { "responseCode": 400 },
+        "responseBody": "={\n  \"success\": false,\n  \"error\": \"{{ $json.error }}\",\n  \"timestamp\": \"{{ $json.timestamp || $now.toISO() }}\",\n  \"raw\": \"{{ ($json.raw || '').slice(0, 8000) }}\"\n}"
+      },
+      "typeVersion": 1.1
+    }
+  ],
+  "connections": {
+    "When chat message received": {
+      "main": [[{ "node": "AI Agent (asks follow-ups + outputs workflow JSON)", "type": "main", "index": 0 }]]
+    },
+
+    "Workflow Generator Form": {
+      "main": [[{ "node": "Normalize Input (Form/Webhook)", "type": "main", "index": 0 }]]
+    },
+    "Webhook Trigger": {
+      "main": [[{ "node": "Normalize Input (Form/Webhook)", "type": "main", "index": 0 }]]
+    },
+
+    "Normalize Input (Form/Webhook)": {
+      "main": [[{ "node": "Switch Provider", "type": "main", "index": 0 }]]
+    },
+
+    "Switch Provider": {
+      "main": [
+        [{ "node": "Prompt (LLM)", "type": "main", "index": 0 }],
+        [{ "node": "Prompt (LLM)", "type": "main", "index": 0 }],
+        [{ "node": "Prompt (LLM)", "type": "main", "index": 0 }],
+        [{ "node": "Prompt (LLM)", "type": "main", "index": 0 }]
+      ]
+    },
+
+    "Prompt (LLM)": {
+      "main": [
+        [{ "node": "LLM Chain (Gemini)", "type": "main", "index": 0 }],
+        [{ "node": "LLM Chain (Ollama)", "type": "main", "index": 0 }],
+        [{ "node": "LLM Chain (OpenRouter)", "type": "main", "index": 0 }]
+      ]
+    },
+
+    "Google Gemini Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Chain (Gemini)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "Ollama Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Chain (Ollama)", "type": "ai_languageModel", "index": 0 }]]
+    },
+    "OpenRouter Chat Model": {
+      "ai_languageModel": [[{ "node": "LLM Chain (OpenRouter)", "type": "ai_languageModel", "index": 0 }]]
+    },
+
+    "LLM Chain (Gemini)": { "main": [[{ "node": "Extract LLM Text", "type": "main", "index": 0 }]] },
+    "LLM Chain (Ollama)": { "main": [[{ "node": "Extract LLM Text", "type": "main", "index": 0 }]] },
+    "LLM Chain (OpenRouter)": { "main": [[{ "node": "Extract LLM Text", "type": "main", "index": 0 }]] },
+
+    "Extract LLM Text": { "main": [[{ "node": "Validate / Coerce JSON", "type": "main", "index": 0 }]] },
+    "Validate / Coerce JSON": { "main": [[{ "node": "IF Valid", "type": "main", "index": 0 }]] },
+
+    "IF Valid": {
+      "main": [
+        [
+          { "node": "Show Results (Form)", "type": "main", "index": 0 },
+          { "node": "Return Success (Webhook)", "type": "main", "index": 0 }
+        ],
+        [
+          { "node": "Show Error (Form)", "type": "main", "index": 0 },
+          { "node": "Return Error (Webhook)", "type": "main", "index": 0 }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "settings": { "saveManualExecutions": true },
+  "active": false
+}

@@ -1,0 +1,649 @@
+{
+  "name": "AI PDF Intake: OCR → Boundary Detection → Split & Save",
+  "active": false,
+  "versionId": "00000000-0000-0000-0000-000000000000",
+  "settings": {
+    "executionOrder": "v1",
+    "saveManualExecutions": true,
+    "timezone": "America/Chicago"
+  },
+  "nodes": [
+    {
+      "id": "Webhook_ReceivePDF",
+      "name": "Webhook (Receive PDF)",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        240,
+        260
+      ],
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "pdf-intake/ai-split",
+        "responseMode": "responseNode",
+        "options": {
+          "rawBody": true
+        }
+      },
+      "notesInFlow": true,
+      "notes": "INPUT ASSUMPTION:\n- A PDF is uploaded to this webhook as multipart/form-data with a binary field named `data`.\n- The node output will contain:\n  - binary.data (the PDF)\n  - json headers/body metadata (optional)\n\nIf your field name differs, change downstream `binaryPropertyName` accordingly."
+    },
+    {
+      "id": "Set_InputMeta",
+      "name": "Set Input Metadata",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        470,
+        260
+      ],
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "inputFileName",
+              "value": "={{$binary.data.fileName || `incoming_${$now.toISO()}.pdf`}}"
+            },
+            {
+              "name": "workRoot",
+              "value": "=/tmp/n8n/pdf-ai-processing"
+            },
+            {
+              "name": "outputDir",
+              "value": "=/tmp/n8n/pdf-ai-processing/output"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "Creates predictable paths for:\n- workRoot: where backups/copies live\n- outputDir: where split PDFs will be saved\n\nAdjust these paths to match your n8n host/container filesystem."
+    },
+    {
+      "id": "Exec_Mkdirs",
+      "name": "Create Work Directories",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 2,
+      "position": [
+        700,
+        260
+      ],
+      "parameters": {
+        "command": "mkdir -p \"{{$json.workRoot}}\" \"{{$json.outputDir}}\""
+      },
+      "notesInFlow": true,
+      "notes": "Creates directories used later for backup + outputs.\nRequires the n8n runtime to allow Execute Command."
+    },
+    {
+      "id": "HTTP_OCR",
+      "name": "AI OCR Node (Full PDF)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        940,
+        260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.AI_OCR_URL || 'https://ai.example.local/v1/ocr/pdf'}}",
+        "responseFormat": "json",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 300000,
+          "fullResponse": false
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "={{$env.AI_API_KEY ? `Bearer ${$env.AI_API_KEY}` : 'Bearer REPLACE_ME'}}"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "HYPOTHETICAL AI OCR NODE (implemented via HTTP Request):\nInput:\n- binary.data (PDF)\nOutput (expected JSON):\n- text: string (full OCR text of the entire PDF)\n- pages: number (optional)\n\nSet env var AI_OCR_URL and AI_API_KEY in your n8n instance."
+    },
+    {
+      "id": "Set_OCRText",
+      "name": "Normalize OCR Output",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        1180,
+        260
+      ],
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "ocrText",
+              "value": "={{$json.text || $json.ocrText || ''}}"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "Ensures downstream nodes can reliably reference:\n- json.ocrText"
+    },
+    {
+      "id": "HTTP_Analyze",
+      "name": "AI Document Analyzer Node",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        1420,
+        260
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.AI_ANALYZER_URL || 'https://ai.example.local/v1/analyze/document-boundaries'}}",
+        "responseFormat": "json",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"text\": $json.ocrText,\n  \"hints\": {\n    \"detect_multiple_documents\": true,\n    \"criteria\": [\n      \"cover_pages\",\n      \"distinct_headers_footers\",\n      \"large_blank_gaps\",\n      \"sudden_format_shift\"\n    ]\n  }\n}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 180000,
+          "fullResponse": false
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "={{$env.AI_API_KEY ? `Bearer ${$env.AI_API_KEY}` : 'Bearer REPLACE_ME'}}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "HYPOTHETICAL AI DOCUMENT ANALYZER NODE (implemented via HTTP Request):\nInput:\n- json.ocrText\nOutput (expected JSON):\n- result: \"Single Document\" | \"Multi-Document\"\n  (alternatively: classification: \"single\"|\"multi\")\n- confidence: number (0..1)\n- rationale: string (optional)\n\nThis MUST output a categorical flag for the Switch node."
+    },
+    {
+      "id": "Set_AnalysisNormalized",
+      "name": "Normalize Analysis Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        1660,
+        260
+      ],
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "analysisResult",
+              "value": "={{$json.result || ($json.classification === 'multi' ? 'Multi-Document' : ($json.classification === 'single' ? 'Single Document' : 'Single Document'))}}"
+            }
+          ],
+          "boolean": [
+            {
+              "name": "isMultiDocument",
+              "value": "={{($json.result || $json.classification || '').toString().toLowerCase().includes('multi')}}"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "Normalizes analyzer output into:\n- json.analysisResult: \"Single Document\" | \"Multi-Document\"\n- json.isMultiDocument: boolean"
+    },
+    {
+      "id": "Switch_SingleVsMulti",
+      "name": "Switch (Single vs Multi)",
+      "type": "n8n-nodes-base.switch",
+      "typeVersion": 2,
+      "position": [
+        1900,
+        260
+      ],
+      "parameters": {
+        "dataType": "boolean",
+        "value1": "={{$json.isMultiDocument}}",
+        "rules": [
+          {
+            "operation": "isTrue"
+          }
+        ]
+      },
+      "notesInFlow": true,
+      "notes": "Branching:\n- TRUE  → Multi-Document path (split + save)\n- FALSE → Single Document path (log success, stop)"
+    },
+    {
+      "id": "Set_SingleDocMsg",
+      "name": "Log Single Document (Success)",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        2140,
+        420
+      ],
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "status",
+              "value": "success"
+            },
+            {
+              "name": "message",
+              "value": "Single document detected. No splitting performed."
+            }
+          ],
+          "string2": [
+            {
+              "name": "analysisResult",
+              "value": "={{$json.analysisResult}}"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "Path A:\nStops after responding. No file manipulation."
+    },
+    {
+      "id": "Write_BackupCopy",
+      "name": "File Management Node (Backup Original PDF)",
+      "type": "n8n-nodes-base.writeBinaryFile",
+      "typeVersion": 1,
+      "position": [
+        2140,
+        140
+      ],
+      "parameters": {
+        "fileName": "={{$json.workRoot + '/' + ($json.inputFileName.replace(/\\.pdf$/i,'') || 'incoming') + '_BACKUP_' + $now.toFormat('yyyyLLdd_HHmmss') + '.pdf'}}",
+        "dataPropertyName": "data"
+      },
+      "notesInFlow": true,
+      "notes": "Path B (Multi-Document):\nPre-split action required by spec.\nCreates a non-destructive copy of the input PDF on disk.\n\nOutput (expected):\n- json.fileName\n- json.filePath (used for extraction commands)\n\nNOTE: Ensure n8n has filesystem write permissions."
+    },
+    {
+      "id": "HTTP_SplitPlan",
+      "name": "AI Document Splitter Node (Detect Page Ranges)",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4,
+      "position": [
+        2380,
+        140
+      ],
+      "parameters": {
+        "method": "POST",
+        "url": "={{$env.AI_SPLITTER_URL || 'https://ai.example.local/v1/split/plan'}}",
+        "responseFormat": "json",
+        "sendBinaryData": true,
+        "binaryPropertyName": "data",
+        "jsonParameters": true,
+        "bodyParametersJson": "={\n  \"text\": $json.ocrText,\n  \"analysis\": {\n    \"result\": $json.analysisResult\n  },\n  \"output_format\": \"segments\"\n}",
+        "authentication": "predefinedCredentialType",
+        "nodeCredentialType": "httpHeaderAuth",
+        "options": {
+          "timeout": 180000,
+          "fullResponse": false
+        },
+        "headerParametersUi": {
+          "parameter": [
+            {
+              "name": "Authorization",
+              "value": "={{$env.AI_API_KEY ? `Bearer ${$env.AI_API_KEY}` : 'Bearer REPLACE_ME'}}"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "HYPOTHETICAL AI DOCUMENT SPLITTER NODE (implemented via HTTP Request):\nInput:\n- binary.data (original PDF)\n- json.ocrText\n- json.analysisResult\n\nOutput (expected JSON):\n- segments: [\n    {\"start_page\": 1, \"end_page\": 5, \"doc_name\": \"Document_A\"},\n    {\"start_page\": 6, \"end_page\": 10, \"doc_name\": \"Document_B\"}\n  ]\n\nThis node only returns a PLAN (page ranges + names). Actual extraction is performed locally in the loop."
+    },
+    {
+      "id": "Code_SegmentsToItems",
+      "name": "Segments to Items",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        2620,
+        140
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const input = items[0].json;\nconst segments = input.segments || [];\n\n// Pull backup path from the backup node output\nconst backupPath = $node[\"File Management Node (Backup Original PDF)\"].json.filePath || $node[\"File Management Node (Backup Original PDF)\"].json.fileName;\nconst outputDir = $node[\"Set Input Metadata\"].json.outputDir;\n\nif (!Array.isArray(segments) || segments.length === 0) {\n  return [{ json: {\n    status: 'error',\n    message: 'Multi-document detected but splitter returned no segments.',\n    backupPath,\n    outputDir,\n    segmentsCount: 0\n  }}];\n}\n\nreturn segments.map((s, idx) => {\n  const docName = (s.doc_name || `Document_${idx + 1}`)\n    .toString()\n    .replace(/[\\\\/:*?\"<>|]+/g, '_')\n    .trim();\n\n  const start = Number(s.start_page);\n  const end = Number(s.end_page);\n\n  return {\n    json: {\n      start_page: start,\n      end_page: end,\n      doc_name: docName,\n      backupPath,\n      outputDir,\n      outputFile: `${outputDir}/${docName}.pdf`\n    }\n  };\n});"
+      },
+      "notesInFlow": true,
+      "notes": "Transforms splitter output array into individual n8n items for looping.\nAlso enriches each item with:\n- backupPath (copied PDF path)\n- outputDir\n- outputFile\n\nSanitizes doc_name for safe filenames."
+    },
+    {
+      "id": "SplitInBatches_Loop",
+      "name": "Item Loop (Split in Batches)",
+      "type": "n8n-nodes-base.splitInBatches",
+      "typeVersion": 3,
+      "position": [
+        2860,
+        140
+      ],
+      "parameters": {
+        "batchSize": 1,
+        "options": {}
+      },
+      "notesInFlow": true,
+      "notes": "Iterates over each segment item.\n- Main output: next segment\n- Second output: completes when no items remain"
+    },
+    {
+      "id": "Exec_ExtractPages",
+      "name": "Extract Page Range (qpdf)",
+      "type": "n8n-nodes-base.executeCommand",
+      "typeVersion": 2,
+      "position": [
+        3100,
+        140
+      ],
+      "parameters": {
+        "command": "qpdf --empty --pages \"{{$json.backupPath}}\" \"{{$json.start_page}}-{{$json.end_page}}\" -- \"{{$json.outputFile}}\""
+      },
+      "notesInFlow": true,
+      "notes": "Extracts the specified page range from the BACKUP copy using qpdf.\n\nRequirements:\n- qpdf installed in the n8n runtime/container.\nAlternatives:\n- pdftk, ghostscript, or a dedicated PDF split node."
+    },
+    {
+      "id": "Set_LoopProgress",
+      "name": "Record Segment Result",
+      "type": "n8n-nodes-base.set",
+      "typeVersion": 2,
+      "position": [
+        3340,
+        140
+      ],
+      "parameters": {
+        "keepOnlySet": false,
+        "values": {
+          "string": [
+            {
+              "name": "segmentStatus",
+              "value": "saved"
+            }
+          ],
+          "string2": [
+            {
+              "name": "savedFile",
+              "value": "={{$json.outputFile}}"
+            }
+          ]
+        }
+      },
+      "notesInFlow": true,
+      "notes": "Annotates each segment item after extraction for easy reporting."
+    },
+    {
+      "id": "Code_SummarizeResults",
+      "name": "Summarize Split Results",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        3580,
+        260
+      ],
+      "parameters": {
+        "mode": "runOnceForAllItems",
+        "jsCode": "const results = items.map(i => i.json);\n\n// If the workflow reaches here via the 'no items left' path,\n// items will be the accumulated items from the loop chain.\n\nconst saved = results\n  .filter(r => r.segmentStatus === 'saved')\n  .map(r => ({ doc_name: r.doc_name, start_page: r.start_page, end_page: r.end_page, file: r.savedFile }));\n\nconst backupPath = results[0]?.backupPath || $node[\"File Management Node (Backup Original PDF)\"].json.filePath;\n\nreturn [{\n  json: {\n    status: 'success',\n    message: `Multi-document split complete. Created ${saved.length} file(s).`,\n    backupPath,\n    outputs: saved\n  }\n}];"
+      },
+      "notesInFlow": true,
+      "notes": "Builds a clean response payload for the webhook caller:\n- backupPath\n- list of generated PDFs with names and page ranges"
+    },
+    {
+      "id": "Respond_Single",
+      "name": "Respond (Single Doc)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2380,
+        420
+      ],
+      "parameters": {
+        "responseBody": "={\n  \"status\": $json.status,\n  \"message\": $json.message,\n  \"analysisResult\": $json.analysisResult\n}",
+        "responseCode": 200,
+        "options": {
+          "responseHeaders": {\n            \"Content-Type\": \"application/json\"\n          }\n        }
+      }
+    },
+    {
+      "id": "Respond_Multi",
+      "name": "Respond (Multi Doc Split Done)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        3820,
+        260
+      ],
+      "parameters": {
+        "responseBody": "={\n  \"status\": $json.status,\n  \"message\": $json.message,\n  \"backupPath\": $json.backupPath,\n  \"outputs\": $json.outputs\n}",
+        "responseCode": 200,
+        "options": {
+          "responseHeaders": {\n            \"Content-Type\": \"application/json\"\n          }\n        }
+      }
+    },
+    {
+      "id": "Respond_Error",
+      "name": "Respond (Error)",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        2860,
+        -40
+      ],
+      "parameters": {
+        "responseBody": "={\n  \"status\": \"error\",\n  \"message\": $json.message || \"Unhandled error\",\n  \"details\": $json\n}",
+        "responseCode": 500,
+        "options": {
+          "responseHeaders": {\n            \"Content-Type\": \"application/json\"\n          }\n        }
+      },
+      "notesInFlow": true,
+      "notes": "Basic error response node.\nWire this into catch paths if you add Error Trigger / try-catch patterns."
+    }
+  ],
+  "connections": {
+    "Webhook (Receive PDF)": {
+      "main": [
+        [
+          {
+            "node": "Set Input Metadata",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Set Input Metadata": {
+      "main": [
+        [
+          {
+            "node": "Create Work Directories",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Work Directories": {
+      "main": [
+        [
+          {
+            "node": "AI OCR Node (Full PDF)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI OCR Node (Full PDF)": {
+      "main": [
+        [
+          {
+            "node": "Normalize OCR Output",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize OCR Output": {
+      "main": [
+        [
+          {
+            "node": "AI Document Analyzer Node",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Document Analyzer Node": {
+      "main": [
+        [
+          {
+            "node": "Normalize Analysis Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Normalize Analysis Result": {
+      "main": [
+        [
+          {
+            "node": "Switch (Single vs Multi)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Switch (Single vs Multi)": {
+      "main": [
+        [
+          {
+            "node": "File Management Node (Backup Original PDF)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Log Single Document (Success)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Single Document (Success)": {
+      "main": [
+        [
+          {
+            "node": "Respond (Single Doc)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "File Management Node (Backup Original PDF)": {
+      "main": [
+        [
+          {
+            "node": "AI Document Splitter Node (Detect Page Ranges)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "AI Document Splitter Node (Detect Page Ranges)": {
+      "main": [
+        [
+          {
+            "node": "Segments to Items",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Segments to Items": {
+      "main": [
+        [
+          {
+            "node": "Item Loop (Split in Batches)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Item Loop (Split in Batches)": {
+      "main": [
+        [
+          {
+            "node": "Extract Page Range (qpdf)",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Summarize Split Results",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Extract Page Range (qpdf)": {
+      "main": [
+        [
+          {
+            "node": "Record Segment Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Record Segment Result": {
+      "main": [
+        [
+          {
+            "node": "Item Loop (Split in Batches)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Summarize Split Results": {
+      "main": [
+        [
+          {
+            "node": "Respond (Multi Doc Split Done)",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "REPLACE_WITH_YOUR_INSTANCE_ID_IF_NEEDED"
+  },
+  "tags": [
+    "pdf",
+    "ocr",
+    "ai",
+    "split"
+  ]
+}
