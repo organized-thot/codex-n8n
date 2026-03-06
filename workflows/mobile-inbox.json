@@ -1,0 +1,275 @@
+{
+  "name": "Mobile Inbox",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "mobile/inbox",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "7f4cd9f2-4d44-4c6f-bcb2-4adf00aa0081",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1080,
+        160
+      ],
+      "webhookId": "mobile-inbox"
+    },
+    {
+      "parameters": {
+        "jsCode": "const headers = $json.headers ?? {};\nconst body = $json.body ?? {};\n\nconst getHeader = (name) => {\n  const lower = name.toLowerCase();\n  return headers[lower] ?? headers[name] ?? headers[name.toUpperCase()] ?? '';\n};\n\nconst headerSecret = getHeader('x-mobile-secret');\nconst expectedSecret = $env.MOBILE_WEBHOOK_SECRET ?? '';\nconst authorized = Boolean(expectedSecret) && headerSecret === expectedSecret;\n\nconst contentType = String(getHeader('content-type') || '').toLowerCase();\nconst isJsonContentType = contentType.includes('application/json');\n\nconst payloadIsObject = body && typeof body === 'object' && !Array.isArray(body);\nconst rawText = payloadIsObject && typeof body.text === 'string' ? body.text : '';\nconst rawUrl = payloadIsObject && typeof body.url === 'string' ? body.url : '';\nlet rawTags = payloadIsObject ? body.tags : [];\nif (typeof rawTags === 'string') {\n  rawTags = rawTags.split(',').map((t) => t.trim()).filter(Boolean);\n}\nif (!Array.isArray(rawTags)) {\n  rawTags = [];\n}\nconst tags = rawTags\n  .map((tag) => (typeof tag === 'string' ? tag.trim() : String(tag ?? '').trim()))\n  .filter(Boolean);\n\nconst source = payloadIsObject && typeof body.source === 'string' && body.source.trim()\n  ? body.source.trim()\n  : 'ios-shortcut';\n\nconst metaInput = payloadIsObject && body.meta && typeof body.meta === 'object' && !Array.isArray(body.meta)\n  ? body.meta\n  : {};\n\nconst normalized = {\n  text: rawText.trim(),\n  url: rawUrl.trim(),\n  tags,\n  source,\n  meta: {\n    sentAt: typeof metaInput.sentAt === 'string' && metaInput.sentAt.trim() ? metaInput.sentAt : null,\n    device: typeof metaInput.device === 'string' && metaInput.device.trim() ? metaInput.device : null\n  }\n};\n\nconst hasMeaningfulPayload = Boolean(normalized.text || normalized.url || normalized.tags.length > 0);\n\nreturn [{\n  json: {\n    authorized,\n    isJsonContentType,\n    payloadValid: payloadIsObject && hasMeaningfulPayload,\n    normalized,\n    receivedAt: new Date().toISOString()\n  }\n}];"
+      },
+      "id": "5f7656f4-95d4-4a34-b454-4e71f8f8a6e1",
+      "name": "Validate and Normalize",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -860,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.authorized }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "e31b1315-273c-4d68-95e7-a95f504e6367",
+      "name": "IF Authorized",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -640,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'unauthorized' } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "4f4cfbc1-a83e-4a25-a124-57018d2edea3",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -420,
+        320
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.isJsonContentType }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "753cfbec-7983-4e9c-b7db-c63a53b01374",
+      "name": "IF JSON Content-Type",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -420,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'unsupported_media_type', expected: 'application/json' } }}",
+        "options": {
+          "responseCode": 415
+        }
+      },
+      "id": "e8c5ca6f-c255-43be-a4f8-882bc9d0fe25",
+      "name": "Respond 415",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -200,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.payloadValid }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4be14a99-44f3-4f80-a3a5-279bf18ef3bb",
+      "name": "IF Payload Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -200,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'invalid_payload', message: 'Provide at least one of text, url, or tags.' } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "9af0d174-3440-4d6f-9925-081ac3a33ceb",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        20,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const data = $getWorkflowStaticData('global');\nif (!Array.isArray(data.mobileInboxLog)) data.mobileInboxLog = [];\n\nconst entry = {\n  receivedAt: $json.receivedAt,\n  text: $json.normalized.text,\n  url: $json.normalized.url,\n  tags: $json.normalized.tags,\n  source: $json.normalized.source,\n  meta: $json.normalized.meta\n};\n\ndata.mobileInboxLog.push(entry);\nif (data.mobileInboxLog.length > 200) {\n  data.mobileInboxLog = data.mobileInboxLog.slice(-200);\n}\n\nreturn [{\n  json: {\n    ok: true,\n    receivedAt: $json.receivedAt,\n    echo: {\n      text: entry.text,\n      url: entry.url,\n      tags: entry.tags,\n      source: entry.source\n    }\n  }\n}];"
+      },
+      "id": "521f2f98-d86d-4fca-9a98-f8f2476294fb",
+      "name": "Log Inbox Entry",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        20,
+        80
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json }}",
+        "options": {
+          "responseCode": 200
+        }
+      },
+      "id": "d6bc3b18-5d3e-4a70-9f0c-7f6f388c4213",
+      "name": "Respond 200",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        240,
+        80
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate and Normalize",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate and Normalize": {
+      "main": [
+        [
+          {
+            "node": "IF Authorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Authorized": {
+      "main": [
+        [
+          {
+            "node": "IF JSON Content-Type",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF JSON Content-Type": {
+      "main": [
+        [
+          {
+            "node": "IF Payload Valid",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 415",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Payload Valid": {
+      "main": [
+        [
+          {
+            "node": "Log Inbox Entry",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Log Inbox Entry": {
+      "main": [
+        [
+          {
+            "node": "Respond 200",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "n8n-codex"
+  }
+}
