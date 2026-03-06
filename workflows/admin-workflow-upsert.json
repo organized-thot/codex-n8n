@@ -1,0 +1,496 @@
+{
+  "name": "Admin Workflow Upsert",
+  "nodes": [
+    {
+      "parameters": {
+        "httpMethod": "POST",
+        "path": "admin/workflows/upsert",
+        "responseMode": "responseNode",
+        "options": {}
+      },
+      "id": "d2d8f9e5-aaf1-4de2-a686-23f2202b0c48",
+      "name": "Webhook Trigger",
+      "type": "n8n-nodes-base.webhook",
+      "typeVersion": 2,
+      "position": [
+        -1200,
+        260
+      ],
+      "webhookId": "admin-workflows-upsert"
+    },
+    {
+      "parameters": {
+        "jsCode": "const headerSecret = $json.headers?.['x-mobile-secret'] ?? $json.headers?.['X-Mobile-Secret'] ?? '';\nconst expectedSecret = $env.MOBILE_WEBHOOK_SECRET ?? '';\nconst body = $json.body ?? {};\n\nconst hasName = typeof body.name === 'string' && body.name.trim().length > 0;\nconst hasWorkflowJson = body.workflowJson && typeof body.workflowJson === 'object' && !Array.isArray(body.workflowJson);\nconst wf = hasWorkflowJson ? body.workflowJson : {};\nconst hasNodes = Array.isArray(wf.nodes);\nconst hasConnections = wf.connections && typeof wf.connections === 'object' && !Array.isArray(wf.connections);\nconst hasSettings = wf.settings && typeof wf.settings === 'object' && !Array.isArray(wf.settings);\n\nconst payloadValid = hasName && hasWorkflowJson && hasNodes && hasConnections && hasSettings;\n\nreturn [{\n  json: {\n    headerSecret,\n    expectedSecret,\n    authorized: Boolean(expectedSecret) && headerSecret === expectedSecret,\n    payloadValid,\n    payloadError: payloadValid ? null : 'invalid_payload',\n    requestName: hasName ? body.name.trim() : '',\n    workflowJson: hasWorkflowJson ? body.workflowJson : {},\n    activeProvided: typeof body.active === 'boolean',\n    requestedActive: body.active\n  }\n}];"
+      },
+      "id": "fb4a65ea-623e-4122-8359-546f5ecf1713",
+      "name": "Validate Secret and Payload",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -980,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.authorized }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "4fd91274-68dd-4d61-a157-cf7fd1baeb58",
+      "name": "IF Authorized",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -760,
+        260
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'unauthorized' } }}",
+        "options": {
+          "responseCode": 401
+        }
+      },
+      "id": "0d58a1c7-f87e-4cad-87ea-7048e50cdb6c",
+      "name": "Respond 401",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -540,
+        420
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.payloadValid }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "6c5fd56b-f889-4d1f-bc0c-7902ce687b31",
+      "name": "IF Payload Valid",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        -540,
+        160
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: $json.payloadError ?? 'invalid_payload' } }}",
+        "options": {
+          "responseCode": 400
+        }
+      },
+      "id": "119618ec-f52a-4514-a462-ea529fa17a44",
+      "name": "Respond 400",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        -320,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.N8N_PUBLIC_API_BASE + '/workflows?limit=250' }}",
+        "method": "GET",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            }
+          ]
+        },
+        "options": {
+          "response": {
+            "responseFormat": "json",
+            "fullResponse": true
+          }
+        }
+      },
+      "id": "0dd29f19-c812-47af-a2a6-ea835311fce2",
+      "name": "List Workflows",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        -320,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const status = $json.statusCode ?? 0;\nif (status >= 400) {\n  return [{ json: { ok: false, apiError: true, statusCode: status, body: $json.body ?? null } }];\n}\n\nconst original = $items('IF Payload Valid', 0, 0)[0]?.json ?? {};\nconst records = $json.body?.data ?? [];\nconst target = records.find((w) => w?.name === original.requestName);\n\nconst workflowPayload = { ...original.workflowJson, name: original.requestName };\nif (original.activeProvided) workflowPayload.active = original.requestedActive;\n\nreturn [{\n  json: {\n    ok: true,\n    exists: Boolean(target?.id),\n    existingWorkflowId: target?.id ?? null,\n    requestName: original.requestName,\n    workflowPayload\n  }\n}];"
+      },
+      "id": "f77d4698-cfbe-4692-ba6e-a4340e8fba13",
+      "name": "Prepare Upsert",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        -100,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.ok }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "0d8795bb-1998-4ec0-84f4-cc08d6db1aab",
+      "name": "IF List API OK",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        120,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ { ok: false, error: 'n8n_api_error', details: $json.body ?? null } }}",
+        "options": {
+          "responseCode": "={{ $json.statusCode || 502 }}"
+        }
+      },
+      "id": "fba2f7de-4c35-4226-a4bb-f1677993880b",
+      "name": "Respond API Error",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        340,
+        300
+      ]
+    },
+    {
+      "parameters": {
+        "conditions": {
+          "boolean": [
+            {
+              "value1": "={{ $json.exists }}",
+              "value2": true
+            }
+          ]
+        },
+        "options": {}
+      },
+      "id": "3cfa6678-bfeb-4990-b044-c7f6faef1381",
+      "name": "IF Exists",
+      "type": "n8n-nodes-base.if",
+      "typeVersion": 2,
+      "position": [
+        340,
+        120
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.N8N_PUBLIC_API_BASE + '/workflows/' + $json.existingWorkflowId }}",
+        "method": "PUT",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ $json.workflowPayload }}",
+        "options": {
+          "response": {
+            "responseFormat": "json",
+            "fullResponse": true
+          }
+        }
+      },
+      "id": "39f6919f-aae9-4f71-bb02-aabdb710ca4d",
+      "name": "Update Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "url": "={{ $env.N8N_PUBLIC_API_BASE + '/workflows' }}",
+        "method": "POST",
+        "sendHeaders": true,
+        "headerParameters": {
+          "parameters": [
+            {
+              "name": "X-N8N-API-KEY",
+              "value": "={{ $env.N8N_API_KEY }}"
+            },
+            {
+              "name": "Content-Type",
+              "value": "application/json"
+            }
+          ]
+        },
+        "sendBody": true,
+        "contentType": "json",
+        "jsonBody": "={{ $json.workflowPayload }}",
+        "options": {
+          "response": {
+            "responseFormat": "json",
+            "fullResponse": true
+          }
+        }
+      },
+      "id": "40fb0b5a-e480-4fef-ae88-c168c0f99ebe",
+      "name": "Create Workflow",
+      "type": "n8n-nodes-base.httpRequest",
+      "typeVersion": 4.2,
+      "position": [
+        560,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const status = $json.statusCode ?? 0;\nif (status >= 400) {\n  return [{ json: { ok: false, error: 'n8n_api_error', statusCode: status, details: $json.body ?? null } }];\n}\nconst id = $json.body?.id ?? $json.body?.data?.id ?? null;\nreturn [{\n  json: {\n    ok: Boolean(id),\n    action: 'updated',\n    workflowId: id,\n    editorUrl: id ? `https://n8n.ermine-zebra.ts.net/workflow/${id}` : null\n  }\n}];"
+      },
+      "id": "5bc1cf10-e6df-4fca-a7d6-e56d7552e625",
+      "name": "Format Updated Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        20
+      ]
+    },
+    {
+      "parameters": {
+        "jsCode": "const status = $json.statusCode ?? 0;\nif (status >= 400) {\n  return [{ json: { ok: false, error: 'n8n_api_error', statusCode: status, details: $json.body ?? null } }];\n}\nconst id = $json.body?.id ?? $json.body?.data?.id ?? null;\nreturn [{\n  json: {\n    ok: Boolean(id),\n    action: 'created',\n    workflowId: id,\n    editorUrl: id ? `https://n8n.ermine-zebra.ts.net/workflow/${id}` : null\n  }\n}];"
+      },
+      "id": "8ec249ab-a246-47af-9eb4-851370568278",
+      "name": "Format Created Result",
+      "type": "n8n-nodes-base.code",
+      "typeVersion": 2,
+      "position": [
+        780,
+        220
+      ]
+    },
+    {
+      "parameters": {
+        "respondWith": "json",
+        "responseBody": "={{ $json.ok ? { ok: true, action: $json.action, workflowId: $json.workflowId, editorUrl: $json.editorUrl } : { ok: false, error: $json.error || 'upsert_failed' } }}",
+        "options": {
+          "responseCode": "={{ $json.ok ? 200 : ($json.statusCode || 502) }}"
+        }
+      },
+      "id": "f11e1084-7f95-4af8-97a3-082b1240af74",
+      "name": "Respond Result",
+      "type": "n8n-nodes-base.respondToWebhook",
+      "typeVersion": 1,
+      "position": [
+        1020,
+        120
+      ]
+    }
+  ],
+  "connections": {
+    "Webhook Trigger": {
+      "main": [
+        [
+          {
+            "node": "Validate Secret and Payload",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Validate Secret and Payload": {
+      "main": [
+        [
+          {
+            "node": "IF Authorized",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Authorized": {
+      "main": [
+        [
+          {
+            "node": "IF Payload Valid",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 401",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Payload Valid": {
+      "main": [
+        [
+          {
+            "node": "List Workflows",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond 400",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "List Workflows": {
+      "main": [
+        [
+          {
+            "node": "Prepare Upsert",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Prepare Upsert": {
+      "main": [
+        [
+          {
+            "node": "IF List API OK",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF List API OK": {
+      "main": [
+        [
+          {
+            "node": "IF Exists",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Respond API Error",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "IF Exists": {
+      "main": [
+        [
+          {
+            "node": "Update Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ],
+        [
+          {
+            "node": "Create Workflow",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Update Workflow": {
+      "main": [
+        [
+          {
+            "node": "Format Updated Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Create Workflow": {
+      "main": [
+        [
+          {
+            "node": "Format Created Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Updated Result": {
+      "main": [
+        [
+          {
+            "node": "Respond Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    },
+    "Format Created Result": {
+      "main": [
+        [
+          {
+            "node": "Respond Result",
+            "type": "main",
+            "index": 0
+          }
+        ]
+      ]
+    }
+  },
+  "settings": {
+    "executionOrder": "v1"
+  },
+  "pinData": {},
+  "meta": {
+    "instanceId": "n8n-codex"
+  }
+}
